@@ -31,15 +31,10 @@ public class AuthController {
     public String login(@RequestParam String username, @RequestParam String password, Model model) {
         User user = userRepository.findByUsername(username).orElse(null);
 
-        if (user != null) {
-            // Descifrar la contraseña almacenada y comparar con la ingresada
-            String decryptedPassword = EncryptionService.decrypt(user.getPassword());
-            if (password.equals(decryptedPassword)) {
-                model.addAttribute("loginSuccess", true);
-                model.addAttribute("welcomeUser", username);
-                model.addAttribute("encryptedPassword", user.getPassword());
-                return "index";
-            }
+        if (user != null && EncryptionService.matches(password, user.getPassword())) {
+            model.addAttribute("loginSuccess", true);
+            model.addAttribute("welcomeUser", username);
+            return "index";
         }
         model.addAttribute("loginError", "Usuario o contraseña incorrecta");
         addForms(model);
@@ -70,7 +65,6 @@ public class AuthController {
 
         model.addAttribute("registerSuccess", true);
         model.addAttribute("registeredUsername", username);
-        model.addAttribute("encryptedPassword", EncryptionService.encrypt(password));
         addForms(model);
         return "index";
     }

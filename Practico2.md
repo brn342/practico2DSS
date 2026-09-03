@@ -399,3 +399,116 @@ List<Funcion> resultados = funcionRepo.findAll().stream()
 | `buscar=<b>x</b>&y` | — | Se muestra escapado (`&lt;b&gt;`), sin XSS |
 | Log del servidor | `Process[...]` / SpEL | Sin `SpelEvaluationException` ni ejecución |
 
+---
+
+## Ejercicio 5 — Almacenamiento inseguro de credenciales (CWE-312 / CWE-321 / CWE-327)
+
+### 5.1 Hallazgo
+
+Archivo: `Ejercicio5/src/main/java/com/cinebuscador/config/EncryptionService.java`.
+
+1. **Clave embebida en el código fuente (CWE-321).**
+   `private static final String SECRET_KEY = "MySup3rS3cr3tK3y!2024CineBuscadorAES";`
+   Cualquiera con acceso al repo puede descifrar **todas** las contraseñas.
+2. **Modo ECB (CWE-327).** `AES/ECB/PKCS5Padding` es determinista: dos usuarios
+   con la misma contraseña producen exactamente el mismo ciphertext → se pueden
+   detectar contraseñas compartidas / reutilizadas sin descifrar nada.
+3. **Métodos que exponen la clave.** `getStaticKey()`, `getKeyBytes()`,
+   `getKeyHex()` devuelven el material de clave (incluso en HEX, con un comentario
+   que explica cómo usarlo con `openssl`).
+4. **Divulgación en la interfaz.** `AuthController` mete `encryptedPassword` en el
+   modelo y `index.html` lo renderiza (`<div class="code" th:text="${encryptedPassword}">`)
+   tras login/registro.
+5. **De fondo (CWE-257):** almacenar contraseñas de forma **reversible**. Lo
+   correcto es un hash lento con salt (BCrypt/Argon2/PBKDF2).
+
+### 5.2 PoC
+
+Requisitos: `cd Ejercicio5 && mvn spring-boot:run`, app en `http://127.0.0.1:8080`.
+
+**PoC 1 — ECB determinista + divulgación del ciphertext**
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/register \
+  --data-urlencode username=alice --data-urlencode password=Password123 --data-urlencode confirmPwd=Password123
+curl -s -X POST http://127.0.0.1:8080/register \
+  --data-urlencode username=bob   --data-urlencode password=Password123 --data-urlencode confirmPwd=Password123
+
+# la página de login devuelve la password cifrada en <div class="code">
+curl -s -X POST http://127.0.0.1:8080/login \
+  --data-urlencode username=alice --data-urlencode password=Password123 | grep 'class="code"'
+curl -s -X POST http://127.0.0.1:8080/login \
+  --data-urlencode username=bob   --data-urlencode password=Password123 | grep 'class="code"'
+```
+
+Ambos devuelven el **mismo** valor: `X5taFTlhmSEPqle5EyC1gw==` → misma contraseña.
+
+**PoC 2 — Descifrado offline con la clave del código fuente**
+
+```bash
+echo -n 'X5taFTlhmSEPqle5EyC1gw==' | base64 -d > ct.bin
+KEYHEX=$(python3 -c "print(b'MySup3rS3cr3tK3y!2024CineBuscadorAES'[:32].hex())")
+openssl enc -d -aes-256-ecb -K "$KEYHEX" -in ct.bin
+# -> Password123
+```
+
+Se recupera la contraseña en claro de cualquier usuario.
+
+### 5.3 Mitigación
+
+> Decisión del ejercicio: **se mantiene cifrado reversible** (no se migra a hash).
+> Recomendación: para contraseñas, usar BCrypt/Argon2 en lugar de cifrado.
+
+`EncryptionService.java` reescrito:
+
+- **Clave fuera del código**: se lee de la variable de entorno
+  `CINE_ENCRYPTION_KEY` (32 bytes en Base64) o de la propiedad de sistema
+  `cine.encryption.key`. Si no está configurada, la app **no arranca**
+  (`EncryptionStartupCheck` con `@PostConstruct`). Se agrega `.env.example` y
+  `.env` queda en `.gitignore`; `docker-compose.yml` toma la clave del entorno.
+- **AES-256/GCM con IV aleatorio** por operación en vez de ECB. Salida:
+  `Base64(IV(12) || ciphertext || tag(16))`. Cifrado **no determinista** y
+  **autenticado**.
+- Se **eliminan** `getStaticKey()`, `getKeyBytes()`, `getKeyHex()`.
+- `AuthController` ya no agrega `encryptedPassword` al modelo; `index.html` ya no
+  muestra ningún ciphertext. La verificación de login usa comparación en tiempo
+  constante (`MessageDigest.isEqual`).
+
+### 5.4 Verificación
+
+| Caso | Antes | Después |
+|------|-------|---------|
+| App sin `CINE_ENCRYPTION_KEY` | Arranca (clave en código) | **No arranca**: "Falta la clave de cifrado..." |
+| Registro + login (pass correcta / incorrecta) | OK / rechaza | OK ("Bienvenido") / rechaza ("Usuario o contraseña incorrecta") |
+| `alice` y `bob` con misma contraseña (valor en DB) | Ciphertext idéntico (ECB) | Ciphertext distinto (GCM + IV aleatorio): `gJt/RBQE…` vs `DEeOGrvM…` |
+| Página tras login | Muestra `<div class="code">` con la pass cifrada | Sin `class="code"`, sin divulgación |
+| `getKeyHex()` / descifrado con clave del repo (PoC 2) | Recupera `Password123` | Métodos eliminados; la clave no está en el repo |
+
+### Cómo ejecutar el Ejercicio 5
+
+```bash
+cd Ejercicio5
+cp .env.example .env
+echo "CINE_ENCRYPTION_KEY=$(openssl rand -base64 32)" > .env
+docker compose up --build
+# o local:
+CINE_ENCRYPTION_KEY=$(openssl rand -base64 32) mvn spring-boot:run
+```
+
+---
+
+## Resumen de archivos modificados (rama `practico-2`)
+
+| Ejercicio | Archivos |
+|-----------|----------|
+| 1 | `Ejercicio1/app.py` |
+| 2 | `Ejercicio2/templates/edit.html`, `Ejercicio2/app.py` (SQLi secundario) |
+| 3 | `Ejercicio3/src/main/java/com/cinebuscador/controller/PeliculaController.java`, `Ejercicio3/src/main/resources/application.properties` |
+| 4 | `Ejercicio4/.../controller/FuncionController.java`, `Ejercicio4/.../config/SpelEvaluator.java` (eliminado), `Ejercicio4/pom.xml`, `Ejercicio4/.../templates/index.html` |
+| 5 | `Ejercicio5/.../config/EncryptionService.java`, `Ejercicio5/.../config/EncryptionStartupCheck.java` (nuevo), `Ejercicio5/.../controller/AuthController.java`, `Ejercicio5/.../templates/index.html`, `Ejercicio5/docker-compose.yml`, `Ejercicio5/.env.example` (nuevo) |
+| común | `.gitignore` |
+
+Todas las mitigaciones se verificaron ejecutando cada aplicación (Flask con venv;
+Spring Boot con `mvn package` + `java -jar`) y reproduciendo cada PoC antes y
+después del cambio.
+

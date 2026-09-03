@@ -5,3 +5,7 @@ services:
       - "8080:8080"
     environment:
       - SPRING_DATASOURCE_URL=jdbc:h2:file:/data/cine3;AUTO_SERVER=TRUE
+      # Clave de cifrado AES-256 (32 bytes en Base64). NO se versiona:
+      # se toma del entorno del host o de un archivo .env local (ver .env.example).
+      # Generar con: openssl rand -base64 32
+      - CINE_ENCRYPTION_KEY=${CINE_ENCRYPTION_KEY:?Definir CINE_ENCRYPTION_KEY (openssl rand -base64 32) en un archivo .env}

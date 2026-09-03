@@ -1,100 +1,117 @@
 package com.cinebuscador.config;
 
 import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Base64;
 
 /**
- * Servicio de cifrado AES-256 para contraseñas.
+ * Servicio de cifrado simetrico para contrasenas.
  *
- * VULNERABILIDAD CRÍTICA: La clave de cifrado está embebida directamente en el código fuente.
- * Cualquier persona con acceso al código puede descifrar todas las contraseñas almacenadas.
+ * Mitigaciones respecto de la version vulnerable (CWE-312 / CWE-321 / CWE-327):
+ *  - La clave NO esta en el codigo: se lee de la variable de entorno
+ *    CINE_ENCRYPTION_KEY (o la propiedad de sistema cine.encryption.key),
+ *    32 bytes en Base64. Sin clave configurada, la aplicacion no arranca.
+ *  - Se reemplaza AES/ECB por AES-256/GCM con IV aleatorio por operacion:
+ *    cifrado NO determinista (dos usuarios con la misma contrasena obtienen
+ *    ciphertext distinto) y con autenticacion (detecta manipulacion).
+ *  - Se eliminan los metodos que exponian la clave (getStaticKey / getKeyBytes
+ *    / getKeyHex).
+ *
+ * Nota: almacenar contrasenas de forma reversible sigue siendo desaconsejado;
+ * lo recomendado es un hash lento con salt (BCrypt/Argon2/PBKDF2). Aqui se
+ * mantiene el cifrado reversible por decision del ejercicio.
  */
 public class EncryptionService {
 
-    // ============================================================
-    // VULNERABILIDAD #1: Clave estática embebida en el código
-    // ============================================================
-    // La clave AES-256 debe ser de exactamente 32 bytes.
-    // Estática + en source code = cualquier atacante puede obtenerla.
-    private static final String SECRET_KEY = "MySup3rS3cr3tK3y!2024CineBuscadorAES";
+    private static final String CIPHER_ALGO = "AES/GCM/NoPadding";
+    private static final int GCM_TAG_BITS = 128;
+    private static final int GCM_IV_BYTES = 12;
 
-    private static final SecretKeySpec secretKey;
+    private static final SecureRandom RNG = new SecureRandom();
+    private static final SecretKeySpec SECRET_KEY = loadKey();
 
-    static {
-        byte[] keyBytes = SECRET_KEY.getBytes(StandardCharsets.UTF_8);
-        if (keyBytes.length < 32) {
-            // Pad con ceros si la clave es más corta
-            byte[] padded = new byte[32];
-            System.arraycopy(keyBytes, 0, padded, 0, keyBytes.length);
-            secretKey = new SecretKeySpec(padded, "AES");
-        } else {
-            secretKey = new SecretKeySpec(Arrays.copyOf(keyBytes, 32), "AES");
+    private static SecretKeySpec loadKey() {
+        String b64 = System.getenv("CINE_ENCRYPTION_KEY");
+        if (b64 == null || b64.isBlank()) {
+            b64 = System.getProperty("cine.encryption.key");
         }
+        if (b64 == null || b64.isBlank()) {
+            throw new IllegalStateException(
+                "Falta la clave de cifrado. Defina la variable de entorno "
+                + "CINE_ENCRYPTION_KEY con 32 bytes en Base64. "
+                + "Puede generarla con: openssl rand -base64 32");
+        }
+        byte[] key;
+        try {
+            key = Base64.getDecoder().decode(b64.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("CINE_ENCRYPTION_KEY no es Base64 valido.", e);
+        }
+        if (key.length != 32) {
+            throw new IllegalStateException(
+                "CINE_ENCRYPTION_KEY debe decodificar exactamente 32 bytes (AES-256); "
+                + "tiene " + key.length + ".");
+        }
+        return new SecretKeySpec(key, "AES");
     }
 
-    // ============================================================
-    // VULNERABILIDAD #2: ECB mode (determinístico)
-    // ============================================================
-    // ECB produce el mismo ciphertext para el mismo plaintext.
-    // Sin IV aleatorio, permite análisis de patrones entre usuarios.
-    private static final String CIPHER_ALGO = "AES/ECB/PKCS5Padding";
-
-    /**
-     * Cifra la contraseña con AES-256/ECB.
-     */
+    /** Cifra con AES-256/GCM. Formato de salida: Base64( IV(12) || ciphertext+tag ). */
     public static String encrypt(String plaintext) {
         try {
+            byte[] iv = new byte[GCM_IV_BYTES];
+            RNG.nextBytes(iv);
+
             Cipher cipher = Cipher.getInstance(CIPHER_ALGO);
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-            byte[] encrypted = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(encrypted);
-        } catch (Exception e) {
-            throw new RuntimeException("Error al cifrar la contraseña", e);
+            cipher.init(Cipher.ENCRYPT_MODE, SECRET_KEY, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            byte[] ct = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+
+            byte[] out = ByteBuffer.allocate(iv.length + ct.length).put(iv).put(ct).array();
+            return Base64.getEncoder().encodeToString(out);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Error al cifrar la contrasena", e);
         }
     }
 
-    /**
-     * Descifra una contraseña cifrada con AES-256/ECB.
-     */
+    /** Descifra un valor generado por {@link #encrypt(String)}. */
     public static String decrypt(String encryptedBase64) {
         try {
+            byte[] in = Base64.getDecoder().decode(encryptedBase64);
+            if (in.length <= GCM_IV_BYTES) {
+                throw new IllegalArgumentException("Ciphertext demasiado corto");
+            }
+            byte[] iv = Arrays.copyOfRange(in, 0, GCM_IV_BYTES);
+            byte[] ct = Arrays.copyOfRange(in, GCM_IV_BYTES, in.length);
+
             Cipher cipher = Cipher.getInstance(CIPHER_ALGO);
-            cipher.init(Cipher.DECRYPT_MODE, secretKey);
-            byte[] decrypted = cipher.doFinal(Base64.getDecoder().decode(encryptedBase64));
-            return new String(decrypted, StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            throw new RuntimeException("Error al descifrar la contraseña", e);
+            cipher.init(Cipher.DECRYPT_MODE, SECRET_KEY, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            return new String(cipher.doFinal(ct), StandardCharsets.UTF_8);
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            throw new IllegalStateException("Error al descifrar la contrasena", e);
         }
     }
 
-    /**
-     * VULNERABILIDAD: Expone la clave de cifrado embebida.
-     * Esta función no debería existir en producción.
-     */
-    public static String getStaticKey() {
-        return SECRET_KEY;
-    }
-
-    /**
-     * VULNERABILIDAD: Expone los bytes crudos de la clave.
-     * Permite usar la clave con herramientas externas (openssl, etc.).
-     */
-    public static byte[] getKeyBytes() {
-        return secretKey.getEncoded();
-    }
-
-    /**
-     * Comando de ejemplo para descifrar con OpenSSL desde la terminal:
-     * echo "BASE64_STRING" | base64 -d | openssl enc -aes-256-ecb -nosalt -in /dev/stdin -out decrypted.txt -K KEY_HEX -nopad
-     */
-    public static String getKeyHex() {
-        StringBuilder sb = new StringBuilder();
-        for (byte b : secretKey.getEncoded()) {
-            sb.append(String.format("%02x", b));
+    /** Fuerza la carga/validacion de la clave (para fallar al arranque, no en el primer login). */
+    public static void ensureConfigured() {
+        if (SECRET_KEY == null) {
+            throw new IllegalStateException("Clave de cifrado no inicializada");
         }
-        return sb.toString().toUpperCase();
+    }
+
+    /** Comparacion en tiempo constante de la contrasena ingresada contra la almacenada. */
+    public static boolean matches(String rawPassword, String storedEncrypted) {
+        try {
+            byte[] a = decrypt(storedEncrypted).getBytes(StandardCharsets.UTF_8);
+            byte[] b = rawPassword.getBytes(StandardCharsets.UTF_8);
+            return MessageDigest.isEqual(a, b);
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 }
