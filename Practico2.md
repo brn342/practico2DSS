@@ -129,3 +129,93 @@ def buscar_funciones(query, sort_by='nombre', sort_dir='ASC'):
 | `buscar=O'Brien` (comilla literal) | 500 / error SQL | HTTP 200, resultado vacío correcto |
 
 Sin errores `OperationalError` en el log tras el fix.
+
+---
+
+## Ejercicio 2 — Cross-Site Scripting almacenado (CWE-79)
+
+### 2.1 Hallazgo
+
+Archivo: `Ejercicio2/templates/edit.html`, bloque "Descripción actual":
+
+```jinja
+<div class="prev-descripcion">
+    <strong>Descripción actual:</strong><br>
+    {{ pelicula['descripcion'] | safe }}
+</div>
+```
+
+El filtro `| safe` desactiva el autoescape de Jinja2 para el campo `descripcion`.
+Ese campo lo controla el usuario: se guarda **sin sanitizar** en `edit_post()`
+(`Ejercicio2/app.py`) mediante un `UPDATE ... SET descripcion=?`. Cualquier
+persona que edite una película puede almacenar HTML/JS que se ejecutará en el
+navegador de quien luego abra la pantalla de edición de esa película
+(XSS **almacenado / persistente**).
+
+El resto de los puntos donde se muestra `descripcion` (tabla de resultados en
+`index.html`, `<textarea>` y `value="..."` en `edit.html`) **sí** pasan por el
+autoescape de Jinja2 y no son explotables.
+
+### 2.2 PoC
+
+Requisitos: `cd Ejercicio2 && python init_db.py && python app.py`.
+
+1. **Inyección (atacante).** Enviar el formulario de edición de la película `id=1`
+   con una descripción maliciosa:
+
+   ```
+   POST /edit/1
+   Content-Type: application/x-www-form-urlencoded
+
+   nombre=Dune&genero=SciFi&director=DV&descripcion=<img src=x onerror=alert(document.domain)><script>document.title="PWNED"</script>
+   ```
+
+   (equivalente por UI: abrir `http://127.0.0.1:5000/edit/1`, pegar el payload en
+   el campo *Descripción* y "Guardar cambios"). Responde `302` → `/`.
+
+2. **Ejecución (víctima).** La víctima abre `http://127.0.0.1:5000/edit/1`.
+   El HTML servido contiene, sin escapar:
+
+   ```html
+   <div class="prev-descripcion">
+       <strong>Descripción actual:</strong><br>
+       <img src=x onerror=alert(document.domain)><script>document.title="PWNED"</script>
+   </div>
+   ```
+
+   El `onerror` del `<img>` dispara el JS (el `<script>` inyectado post-carga no
+   ejecuta por spec, pero el `onerror` sí): se ejecuta código arbitrario en el
+   contexto de la aplicación (robo de sesión/cookies, acciones en nombre del
+   usuario, etc.).
+
+### 2.3 Mitigación
+
+`Ejercicio2/templates/edit.html`: se **elimina el filtro `| safe`**. La descripción
+es texto plano; con el autoescape de Jinja2, `<`, `>`, `"`, `&` se convierten en
+entidades y el contenido se muestra como texto, nunca como marcado.
+
+```jinja
+<div class="prev-descripcion">
+    <strong>Descripción actual:</strong><br>
+    {{ pelicula['descripcion'] }}
+</div>
+```
+
+Hallazgo secundario: `Ejercicio2/app.py` tenía el **mismo patrón de SQLi que el
+Ejercicio 1** en `buscar_funciones()`. Se aplicó la misma mitigación (parámetro
+ligado `?` + allowlist de `ORDER BY`).
+
+Recomendación adicional (no requerida para cerrar el hallazgo): cabecera
+`Content-Security-Policy` restrictiva como defensa en profundidad. No se
+implementó aquí para no romper los manejadores inline (`onchange=...`) de las
+plantillas del ejercicio.
+
+### 2.4 Verificación
+
+| Caso | Antes | Después |
+|------|-------|---------|
+| Payload en `descripcion`, abrir `/edit/1` | Se renderiza `<img onerror>` → JS ejecuta | `&lt;img src=x onerror=...&gt;` como texto, inerte |
+| `<textarea>` / tabla de resultados | Ya escapado | Sin cambios, escapado |
+| Edición y guardado normal de una película | OK | OK |
+| PoC UNION SQLi (hallazgo secundario) | Exfiltra datos | "No se encontraron funciones" |
+| Búsqueda normal | OK | OK |

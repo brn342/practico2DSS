@@ -83,7 +83,10 @@
                 {% if pelicula['descripcion'] %}
                     <div class="prev-descripcion">
                         <strong>Descripción actual:</strong><br>
-                        {{ pelicula['descripcion'] | safe }}
+                        {# Mitigacion XSS almacenado (CWE-79): se elimina el filtro | safe.
+                           La descripcion es texto plano; Jinja2 la autoescapa y cualquier
+                           <script>/<img onerror> se muestra como texto, no se ejecuta. #}
+                        {{ pelicula['descripcion'] }}
                     </div>
                 {% endif %}
                 <textarea id="descripcion" name="descripcion">{{ pelicula['descripcion'] }}</textarea>

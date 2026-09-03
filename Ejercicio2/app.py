@@ -20,19 +20,25 @@ def close_db(exception):
         db.close()
 
 
+# Hallazgo secundario: mismo patron de SQLi (CWE-89) que el Ejercicio 1.
+# Se aplica la misma mitigacion: parametro ligado + allowlist de ORDER BY.
+_COLUMNAS_ORDEN = {'nombre': 'peliculas.nombre', 'fecha': 'funciones.fecha_hora'}
+
+
 def buscar_funciones(query, sort_by='nombre', sort_dir='ASC'):
     db = get_db()
+    orden_columna = _COLUMNAS_ORDEN.get(sort_by, 'peliculas.nombre')
+    orden_sentido = 'DESC' if str(sort_dir).upper() == 'DESC' else 'ASC'
     sql = (
-        f"SELECT peliculas.nombre as pelicula, funciones.fecha_hora, "
-        f"(funciones.asientos_totales - funciones.asientos_ocupados) as disponibles, "
-        f"peliculas.descripcion as descripcion, peliculas.id as id "
-        f"FROM funciones "
-        f"JOIN peliculas ON funciones.pelicula_id = peliculas.id "
-        f"WHERE peliculas.nombre LIKE '%{query}%' "
-        f"ORDER BY {'peliculas.nombre' if sort_by == 'nombre' else 'funciones.fecha_hora'} "
-        f"{sort_dir}"
+        "SELECT peliculas.nombre as pelicula, funciones.fecha_hora, "
+        "(funciones.asientos_totales - funciones.asientos_ocupados) as disponibles, "
+        "peliculas.descripcion as descripcion, peliculas.id as id "
+        "FROM funciones "
+        "JOIN peliculas ON funciones.pelicula_id = peliculas.id "
+        "WHERE peliculas.nombre LIKE ? "
+        f"ORDER BY {orden_columna} {orden_sentido}"
     )
-    return db.execute(sql).fetchall()
+    return db.execute(sql, (f"%{query}%",)).fetchall()
 
 
 @app.route('/')
