@@ -1,0 +1,7 @@
+services:
+  ejercicio1:
+    build: .
+    container_name: ejercicio1-sqli
+    ports:
+      - "5000:5000"
+    restart: unless-stopped

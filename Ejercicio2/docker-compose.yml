@@ -1,0 +1,7 @@
+services:
+  ejercicio1:
+    build: .
+    container_name: ejercicio2-xss
+    ports:
+      - "5000:5000"
+    restart: unless-stopped

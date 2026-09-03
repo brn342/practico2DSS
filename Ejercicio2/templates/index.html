@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CineBuscador - Funciones de Cine</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0f1923;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1a2a3a 0%, #2d4a5a 100%);
+            padding: 30px 40px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            color: #ffd700;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: #a0b0c0;
+            font-size: 1.05rem;
+        }
+
+        .container { max-width: 960px; margin: 30px auto; padding: 0 20px; }
+
+        .search-box { display: flex; gap: 12px; margin-bottom: 12px; }
+
+        .search-box input[type="text"] {
+            flex: 1; padding: 14px 20px; font-size: 1rem;
+            border: 2px solid #2d4a5a; border-radius: 8px;
+            background-color: #1a2a3a; color: #e0e0e0; outline: none;
+        }
+
+        .search-box input[type="text"]:focus { border-color: #ffd700; }
+
+        .search-box button {
+            padding: 14px 28px; font-size: 1rem; font-weight: 600;
+            border: none; border-radius: 8px; cursor: pointer;
+            background-color: #ffd700; color: #1a2a3a;
+        }
+
+        .search-box button:hover { background-color: #ffcc00; }
+
+        .sort-controls { display: flex; gap: 12px; align-items: center; margin-bottom: 30px; }
+
+        .sort-controls label { font-size: 0.9rem; color: #8a9aaa; }
+
+        .sort-controls select {
+            padding: 8px 14px; font-size: 0.9rem; border: 2px solid #2d4a5a;
+            border-radius: 8px; background-color: #1a2a3a; color: #e0e0e0; cursor: pointer;
+        }
+
+        .th-active { color: #ffd700; }
+        .th-sortable { cursor: pointer; user-select: none; position: relative; white-space: nowrap; }
+        .th-sortable:hover { color: #ffffff; }
+
+        .table-wrapper {
+            background-color: #1a2a3a; border-radius: 10px;
+            overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        thead th {
+            background-color: #2d4a5a; padding: 16px 20px; text-align: left;
+            font-weight: 600; color: #ffd700; font-size: 0.95rem;
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+
+        tbody td { padding: 14px 20px; border-top: 1px solid #2a3a4a; font-size: 0.95rem; }
+        tbody tr:hover { background-color: #243a4a; }
+
+        .pelicula-nombre { font-weight: 600; color: #ffffff; }
+        .fecha-hora { color: #b0c8d8; font-family: 'Courier New', monospace; }
+
+        .asientos-disponibles {
+            font-weight: 600; padding: 4px 12px; border-radius: 20px;
+            display: inline-block; text-align: center; min-width: 50px;
+        }
+        .asientos-alto { background-color: #1b5e20; color: #a5d6a7; }
+        .asientos-medio { background-color: #e65100; color: #ffe0b2; }
+        .asientos-bajo { background-color: #b71c1c; color: #ffcdd2; }
+
+        .no-resultados { text-align: center; padding: 60px 20px; color: #6a8a9a; }
+        .no-resultados p { font-size: 1.1rem; margin-bottom: 8px; }
+        .icono { font-size: 3rem; margin-bottom: 16px; }
+
+        .buscador-vacio { text-align: center; padding: 80px 20px; color: #6a8a9a; }
+        .buscador-vacio h2 { color: #a0b8c8; margin-bottom: 12px; font-size: 1.4rem; }
+
+        .descripcion { color: #9ab0c0; font-size: 0.85rem; max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .link-edit { color: #ffd700; text-decoration: underline; cursor: pointer; }
+
+        @media (max-width: 600px) {
+            .header h1 { font-size: 1.5rem; }
+            .search-box { flex-direction: column; }
+            thead th, tbody td { padding: 12px 14px; font-size: 0.85rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>&#9786; CineBuscador</h1>
+        <p>Encontrá las funciones de cine que buscas</p>
+    </div>
+
+    <div class="container">
+        <form class="search-box" method="get" action="/">
+            <input type="text" name="buscar" placeholder="Buscar por nombre de película..." value="{{ query }}">
+            <button type="submit">Buscar</button>
+        </form>
+
+        {% if query %}
+        <div class="sort-controls">
+            <label>Ordenar por:</label>
+            <select name="ordenar_por" onchange="this.form.submit()">
+                <option value="nombre" {{ 'selected' if sort_by == 'nombre' }}>Nombre de película</option>
+                <option value="fecha" {{ 'selected' if sort_by == 'fecha' }}>Fecha y hora</option>
+            </select>
+            <label>Sentido:</label>
+            <select name="sentido" onchange="this.form.submit()">
+                <option value="ASC" {{ 'selected' if sort_dir == 'ASC' }}>Ascendente ↑</option>
+                <option value="DESC" {{ 'selected' if sort_dir == 'DESC' }}>Descendente ↓</option>
+            </select>
+        </div>
+        {% endif %}
+
+        {% if not query %}
+            <div class="buscador-vacio">
+                <h2>Buscá tu película favorita</h2>
+                <p>Escribí el nombre de una película para ver las funciones disponibles.</p>
+            </div>
+
+        {% elif resultados %}
+            <p class="results-info" style="margin-bottom:16px;font-size:.95rem;color:#8a9aaa;">
+                Resultados para "<strong>{{ query }}</strong>": {{ resultados|length }} función(es) encontrada(s)
+            </p>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            {% if sort_by == 'nombre' %}
+                                {% if sort_dir == 'ASC' %}
+                                    <th class="th-active"><span>Película &#x2191;</span></th>
+                                {% else %}
+                                    <th class="th-active"><span>Película &#x2193;</span></th>
+                                {% endif %}
+                            {% else %}
+                                <th class="th-sortable">Película</th>
+                            {% endif %}
+                            {% if sort_by == 'fecha' %}
+                                {% if sort_dir == 'ASC' %}
+                                    <th class="th-active"><span>Fecha y Hora &#x2191;</span></th>
+                                {% else %}
+                                    <th class="th-active"><span>Fecha y Hora &#x2193;</span></th>
+                                {% endif %}
+                            {% else %}
+                                <th class="th-sortable">Fecha y Hora</th>
+                            {% endif %}
+                            <th>Asientos Disponibles</th>
+                            <th>Descripción</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fila in resultados %}
+                        <tr>
+                            <td class="pelicula-nombre">{{ fila['pelicula'] }}</td>
+                            <td class="fecha-hora">
+                                {{ fila['fecha_hora'][:10] | replace('-', '/') }}&nbsp;{{ fila['fecha_hora'][11:16] }}
+                            </td>
+                            <td>
+                                {% set asientos = fila['disponibles'] %}
+                                {% if asientos >= 30 %}
+                                    <span class="asientos-disponibles asientos-alto">{{ asientos }}</span>
+                                {% elif asientos >= 10 %}
+                                    <span class="asientos-disponibles asientos-medio">{{ asientos }}</span>
+                                {% else %}
+                                    <span class="asientos-disponibles asientos-bajo">{{ asientos }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if fila['descripcion'] %}
+                                    <span class="descripcion" title="{{ fila['descripcion'] }}">{{ fila['descripcion'][:250] }}</span>
+                                    &nbsp;
+                                    <a class="link-edit" href="/edit/{{ fila['id'] }}">Editar</a>
+                                {% else %}
+                                    <em style="color:#6a8a9a">Sin descripción</em>
+                                    &nbsp;
+                                    <a class="link-edit" href="/edit/{{ fila['id'] }}">Editar</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+        {% else %}
+            <div class="no-resultados">
+                <div class="icono">&#128308;</div>
+                <p>No se encontraron funciones para "<strong>{{ query }}</strong>"</p>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>

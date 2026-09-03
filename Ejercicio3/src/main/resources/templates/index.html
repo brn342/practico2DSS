@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Cine Buscador - Cargar Afiche</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f5f5f5; }
+        h1 { color: #333; }
+        .search-form { margin-bottom: 30px; }
+        .search-form input[type="text"] { padding: 8px 12px; width: 300px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+        .search-form button { padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .search-form button:hover { background: #1976D2; }
+        .sorting { margin-bottom: 15px; font-size: 13px; color: #555; }
+        .sorting a { color: #2196F3; text-decoration: none; margin: 0 8px; }
+        .sorting a:hover { text-decoration: underline; }
+        .movie-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; gap: 20px; align-items: flex-start; }
+        .movie-info { flex: 1; }
+        .movie-info h2 { margin: 0 0 8px 0; color: #1976D2; font-size: 20px; }
+        .movie-info p { margin: 4px 0; color: #555; font-size: 14px; }
+        .movie-info p strong { color: #333; }
+        .afiche { width: 150px; height: 220px; object-fit: cover; border-radius: 4px; background: #ddd; flex-shrink: 0; }
+        .upload-btn { display: inline-block; padding: 8px 16px; background: #FF9800; color: white; text-decoration: none; border-radius: 4px; font-size: 13px; margin-top: 10px; }
+        .upload-btn:hover { background: #F57C00; }
+        .no-results { color: #777; font-style: italic; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Cine Buscador - Cargar Afiche</h1>
+
+    <div class="search-form">
+        <form method="get" action="/">
+            <input type="text" name="buscar" placeholder="Buscar por nombre..." th:value="${query != null ? query : ''}">
+            <button type="submit">Buscar</button>
+        </form>
+    </div>
+
+    <div th:if="${resultados != null and !resultados.isEmpty()}" class="sorting">
+        Ordenar por:
+        <a th:href="@{/(buscar=${query}, ordenar_por='nombre', sentido='ASC')}"
+           th:classappend="${sort_by == 'nombre' and sort_dir == 'ASC'} ? 'font-weight:bold'">
+            Nombre A&#8594;Z
+        </a>
+        <a th:href="@{/(buscar=${query}, ordenar_por='nombre', sentido='DESC')}"
+           th:classappend="${sort_by == 'nombre' and sort_dir == 'DESC'} ? 'font-weight:bold'">
+            Nombre Z&#8594;A
+        </a>
+        <a th:href="@{/(buscar=${query}, ordenar_por='fecha_hora', sentido='ASC')}"
+           th:classappend="${sort_by == 'fecha_hora' and sort_dir == 'ASC'} ? 'font-weight:bold'">
+            Fecha &#8594;
+        </a>
+        <a th:href="@{/(buscar=${query}, ordenar_por='fecha_hora', sentido='DESC')}"
+           th:classappend="${sort_by == 'fecha_hora' and sort_dir == 'DESC'} ? 'font-weight:bold'">
+            Fecha &#8593;
+        </a>
+    </div>
+
+    <div th:if="${resultados != null and !resultados.isEmpty()}" th:each="resultado : ${resultados}" class="movie-card">
+        <img th:if="${resultado.afichePath != null}"
+             th:src="@{/uploads/{name}(name=${resultado.afichePath})}"
+             class="afiche"
+             alt="Afiche">
+        <img th:unless="${resultado.afichePath != null}"
+             class="afiche"
+             src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='220'%3E%3Crect fill='%23ddd' width='150' height='220'/%3E%3Ctext fill='%23999' x='50%25' y='50%25' text-anchor='middle' dy='.3em'%3ESin afiche%3C/text%3E%3C/svg%3E"
+             alt="Sin afiche">
+
+        <div class="movie-info">
+            <h2 th:text="${resultado.nombre}">Nombre</h2>
+            <p><strong>Funci&#243;n:</strong> <span th:text="${resultado.fechaHora}"></span></p>
+            <p><strong>Asientos disponibles:</strong> <span th:text="${resultado.disponibles}"></span></p>
+            <p><th:block th:if="${resultado.descripcion != null}" th:text="${resultado.descripcion}"></th:block></p>
+            <a th:href="@{/upload/{id}(id=${resultado.id})}" class="upload-btn">Subir afiche</a>
+        </div>
+    </div>
+
+    <p th:if="${resultados == null or resultados.isEmpty()}" class="no-results"
+       th:text="${query != null and !query.isEmpty()} ? 'No se encontraron resultados.' : 'Ingresa un t&#233;rmino de b&#250;squeda.'"></p>
+</body>
+</html>

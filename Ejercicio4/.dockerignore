@@ -1,0 +1,6 @@
+target/
+*.mv.db
+*.log
+.claude/
+.git/
+.gitignore

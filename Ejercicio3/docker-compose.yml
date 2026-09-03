@@ -1,0 +1,9 @@
+services:
+  cinebuscador:
+    build: .
+    container_name: cinebuscador3
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:h2:file:/data/cine3;AUTO_SERVER=TRUE
+      - APP_UPLOAD_DIR=/uploads
