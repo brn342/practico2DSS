@@ -20,16 +20,29 @@ def close_db(exception):
         db.close()
 
 
+# Mitigacion SQLi (CWE-89):
+#  - El termino de busqueda viaja como parametro ligado (?), nunca concatenado.
+#  - sort_by / sort_dir NO se interpolan: se usan solo para elegir un fragmento
+#    fijo desde una allowlist. La entrada del usuario jamas llega al texto SQL.
+_COLUMNAS_ORDEN = {
+    'nombre': 'peliculas.nombre',
+    'fecha': 'funciones.fecha_hora',
+}
+
+
 def buscar_funciones(query, sort_by='nombre', sort_dir='ASC'):
     db = get_db()
-    sql = f"SELECT peliculas.nombre as pelicula, funciones.fecha_hora, " \
-          f"(funciones.asientos_totales - funciones.asientos_ocupados) as disponibles " \
-          f"FROM funciones " \
-          f"JOIN peliculas ON funciones.pelicula_id = peliculas.id " \
-          f"WHERE peliculas.nombre LIKE '%{query}%' " \
-          f"ORDER BY {'peliculas.nombre' if sort_by == 'nombre' else 'funciones.fecha_hora'} " \
-          f"{sort_dir}"
-    return db.execute(sql).fetchall()
+    orden_columna = _COLUMNAS_ORDEN.get(sort_by, 'peliculas.nombre')
+    orden_sentido = 'DESC' if str(sort_dir).upper() == 'DESC' else 'ASC'
+    sql = (
+        "SELECT peliculas.nombre as pelicula, funciones.fecha_hora, "
+        "(funciones.asientos_totales - funciones.asientos_ocupados) as disponibles "
+        "FROM funciones "
+        "JOIN peliculas ON funciones.pelicula_id = peliculas.id "
+        "WHERE peliculas.nombre LIKE ? "
+        f"ORDER BY {orden_columna} {orden_sentido}"
+    )
+    return db.execute(sql, (f"%{query}%",)).fetchall()
 
 
 @app.route('/')
