@@ -219,3 +219,99 @@ plantillas del ejercicio.
 | Edición y guardado normal de una película | OK | OK |
 | PoC UNION SQLi (hallazgo secundario) | Exfiltra datos | "No se encontraron funciones" |
 | Búsqueda normal | OK | OK |
+
+---
+
+## Ejercicio 3 — Carga de archivos sin restricción + Path Traversal (CWE-434 / CWE-22)
+
+### 3.1 Hallazgo
+
+Archivo: `Ejercicio3/src/main/java/com/cinebuscador/controller/PeliculaController.java`.
+
+```java
+String filename = archivo.getOriginalFilename();
+Path uploadPath = Paths.get(uploadDir);
+...
+Files.copy(archivo.getInputStream(), uploadPath.resolve(filename));
+pelicula.setAfichePath(filename);
+```
+
+Problemas:
+
+1. **Sin validación de tipo/contenido (CWE-434).** Se acepta cualquier archivo
+   (`accept="*/*"` en el form y cero chequeos en el servidor). `serveFile()`
+   luego lo devuelve con `Content-Disposition: inline` y un `Content-Type`
+   **adivinado por extensión**. Subiendo `poster.html` se obtiene un documento
+   `text/html` servido *inline* desde el mismo origen de la app → **XSS
+   almacenado** (y con SVG, JS embebido, etc.).
+2. **Path Traversal en la escritura (CWE-22).** `getOriginalFilename()` es
+   controlado por el cliente y se pasa tal cual a `resolve()`. Un `filename` del
+   multipart con `../../../..` escribe el archivo **fuera** de `uploadDir`
+   (escritura arbitraria de archivos).
+3. **`serveFile()` sin contención.** `Paths.get(uploadDir).resolve(filename).normalize()`
+   no verifica que el resultado siga dentro de `uploadDir`. Hoy Tomcat
+   (`StrictHttpFirewall`) bloquea `../` y `%2f` en la URL, pero el método queda
+   como bug latente si esa protección cambia.
+4. Sin límite de tamaño explícito.
+
+### 3.2 PoC
+
+Requisitos: `cd Ejercicio3 && mvn spring-boot:run` (o `docker compose up`),
+app en `http://127.0.0.1:8080`.
+
+**PoC 1 — Subir HTML como "afiche" → XSS almacenado**
+
+```bash
+printf '<html><body><script>alert(document.domain)</script></body></html>' > xss.html
+curl -X POST http://127.0.0.1:8080/upload/1 \
+     -F 'afiche=@xss.html;type=image/png;filename=xss.html'
+curl -i http://127.0.0.1:8080/uploads/xss.html
+```
+
+Respuesta observada (antes del fix):
+
+```
+HTTP/1.1 200
+Content-Type: text/html
+Content-Disposition: inline; filename="xss.html"
+
+<html><body><script>alert(document.domain)</script></body></html>
+```
+
+El navegador ejecuta el `<script>` en el origen de la aplicación.
+
+**PoC 2 — Path Traversal en la escritura**
+
+```bash
+curl -X POST http://127.0.0.1:8080/upload/1 \
+     -F 'afiche=@cualquier.png;filename=../../../../../../tmp/ej3_PWNED_write.txt'
+ls -l /tmp/ej3_PWNED_write.txt      # <-- el archivo aparece FUERA de uploadDir
+```
+
+### 3.3 Mitigación
+
+`PeliculaController.java`:
+
+- **Nombre generado en el servidor**: `UUID.randomUUID() + "." + ext`. El nombre
+  del cliente se ignora por completo → no hay traversal en la escritura.
+- **Allowlist por contenido real**: se decodifica el archivo con `ImageIO`
+  (`getImageReaders` + `reader.read(0)`). Solo se acepta si el **formato real**
+  es `JPEG/PNG/GIF/BMP`. Esto rechaza HTML, SVG, JS, binarios y poliglotas,
+  independientemente de la extensión y del `Content-Type` que mande el cliente.
+- **Límite de tamaño**: 2 MB en código + `spring.servlet.multipart.max-file-size=2MB`
+  en `application.properties`.
+- **`serveFile()` endurecido**: rechaza nombres con `/`, `\` o `..`; solo sirve
+  extensiones de imagen conocidas con un `Content-Type` **fijo** (no adivinado);
+  verifica `filePath.startsWith(base)` (contención dentro de `uploadDir`); agrega
+  `X-Content-Type-Options: nosniff`.
+
+### 3.4 Verificación
+
+| Caso | Antes | Después |
+|------|-------|---------|
+| `xss.html` subido como `poster.png` | 200 `text/html` inline → XSS | POST redirige con error; `GET /uploads/poster.png` → 404 |
+| `xss.svg` con `<script>`/`onload` | Se serviría | Rechazado (no es imagen decodificable) |
+| `filename=../../../../tmp/ej3_PWNED_write.txt` | Archivo escrito fuera de `uploadDir` | Nombre ignorado; nada fuera de `uploadDir` |
+| PNG válido (`whatever.php.png`) | OK, nombre del cliente | OK, guardado como `<uuid>.png`, servido `image/png` + `nosniff` |
+| `GET /uploads/..%2f..%2fapplication.properties` | (Tomcat ya devolvía 400) | 400/404, además con contención propia |
+
